@@ -128,7 +128,6 @@ aml-heterophily-gnn/
 │
 ├── results/
 │   ├── figures/           # Score distributions, PR curves, confusion matrix, loss curves
-│   └── tables/            # Model comparison tables
 │
 └── docs/
     ├── report.pdf         # Full paper
