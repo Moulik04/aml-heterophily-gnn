@@ -216,19 +216,19 @@ python aml_gnn_v2.py --dataset ibm --model all
 
 GAT score distribution — fraud probability spreads broadly across benign transactions:
 
-![GAT Score Distribution](results/figures/score_dist_gat.png)
+![GAT Score Distribution](results/figures/score_dist_GAT.png)
 
 H2GCN score distribution — sharp bimodal separation after ego-neighbor separation:
 
-![H2GCN Score Distribution](results/figures/score_dist_h2gcn.png)
+![H2GCN Score Distribution](results/figures/score_dist_H2GCN.png)
 
 ### Precision-Recall Curve (H2GCN, IBM)
 
-![PR Curve H2GCN](results/figures/pr_curve_h2gcn.png)
+![PR Curve H2GCN](results/figures/pr_curve_H2GCN.png)
 
 ### Training Curves (H2GCN)
 
-![Loss and Recall Curves](results/figures/training_curves_h2gcn.png)
+![Loss and Recall Curves](results/figures/training_curves_H2GCN.png)
 
 ---
 
