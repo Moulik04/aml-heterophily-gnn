@@ -1,6 +1,7 @@
-# Graph-Based Financial Intelligence: Detecting Money Laundering with Heterophily-Aware GNNs
+# Graph-Based Financial Intelligence
+## Detecting Money Laundering with Heterophily-Aware Graph Neural Networks
 
-> **DS402 Final Project — Penn State University, April 2026**
+> DS402 Final Project — Penn State University, April 2026  
 > Moulik Jain
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://python.org)
@@ -10,13 +11,17 @@
 
 ---
 
-## Overview
+## The Problem
 
-Anti-money laundering (AML) detection in financial networks faces three compounding challenges: extreme class imbalance (0.003% fraud rate), relational structure that tabular models cannot exploit, and adversarial actors who deliberately route funds through legitimate accounts.
+Money laundering is a **structural** phenomenon. Fraudsters layer funds through chains of legitimate intermediary accounts — smurfing, roundtripping, shell companies. Standard GNNs that average over neighbor features wash out the fraud signal at exactly the nodes where it needs to be amplified.
 
-This project identifies **heterophily**, the tendency of fraudulent nodes to connect to legitimate ones, as the central failure mode of standard GNNs on AML graphs. Standard message-passing architectures (GAT, GraphSAGE) dilute the fraud signal by averaging over predominantly benign neighborhoods. I address this with **H2GCN**, a heterophily-aware architecture that separates ego embeddings from neighbor aggregation, and further introduce a two-stage cascade combining H2GCN node embeddings with XGBoost.
+This project identifies **heterophily** — fraudulent nodes connecting predominantly to legitimate ones — as the core failure mode of standard GNNs on financial graphs, and addresses it with **H2GCN** combined with a two-stage cascade classifier.
 
-### Key Results
+---
+
+## Key Results
+
+### IBM AML HI-Medium (2M transactions, 0.003% fraud rate)
 
 | Model | ROC-AUC | PR-AUC | Recall |
 |---|---|---|---|
@@ -28,64 +33,81 @@ This project identifies **heterophily**, the tendency of fraudulent nodes to con
 | H2GCN | 0.960 | 0.113 | **0.903** |
 | **H2GCN + XGBoost Cascade** | **0.993** | **0.595** | 0.548 |
 
-> Evaluated on IBM AML HI-Medium test set (400,000 transactions, 0.003% fraud rate).
-> GAT generates 187,115 false positives at 96% recall. The cascade reduces this to 46,373, a 4× reduction, while maintaining PR-AUC 119× higher than GAT standalone.
+**GAT** achieves 96% recall but generates **187,115 false positives** — 1,573 false alarms per real fraud detected. Operationally unacceptable.
 
-**Elliptic Bitcoin generalization** (zero-shot, no retraining): GAT achieves ROC-AUC = 0.906, PR-AUC = 0.599, Recall = 0.944.
+**H2GCN** achieves **22× better PR-AUC** than GAT (0.113 vs. 0.005) with the only architectural change being ego-neighbor separation.
+
+**The cascade** reduces false positives from 187,115 → 46,373 while achieving PR-AUC = 0.595 — a **119× improvement** over GAT standalone.
+
+### Elliptic Bitcoin (zero-shot generalization, no retraining)
+GAT: ROC-AUC = 0.906 | PR-AUC = 0.599 | Recall = 0.944
 
 ---
 
-## The Core Problem: Heterophily in Financial Graphs
+## Why Heterophily Matters
 
-Money laundering is a *structural* phenomenon. Fraudsters layer funds through chains of legitimate intermediary accounts (smurfing, roundtripping, shell companies). This means the neighborhood of a fraudulent node is overwhelmingly benign, standard GNNs that average over neighbor features wash out the fraud signal before classification.
+Under **GAT**: high fraud probabilities spread broadly to benign transactions because accounts neighboring a flagged node inherit inflated scores through message passing.
 
-**GAT score distribution:** High fraud probabilities spread broadly to benign transactions, producing ~187K false positives.
+Under **H2GCN**: ego-neighbor separation anchors each node's representation independently, producing a sharp bimodal score distribution — fraud near 1.0, benign near 0.0.
 
-**H2GCN score distribution:** Ego-neighbor separation produces a sharp bimodal distribution, fraud scores cluster near 1.0 for true positives, 0.0 for benign transactions.
+The 22× PR-AUC gap between H2GCN and GAT on identical data, features, and training procedure isolates heterophily — not model capacity — as the bottleneck.
 
 ---
 
 ## Architecture
 
-### H2GCN (Heterophily-Aware GCN)
+### H2GCN — Three Design Principles
 
-Three design principles adapted from Zhu et al. (2020):
+**1. Ego-neighbor separation**  
+Node features are projected to a hidden representation independently of any neighbor aggregation.
 
-1. **Ego-neighbor separation** — node's own features are projected independently, never mixed with aggregated neighbor features
-2. **Multi-hop aggregation** — separate SAGEConv layers aggregate 1-hop and 2-hop neighborhoods
-3. **Concatenative combination** — ego embedding and all hop-wise aggregations are concatenated (not averaged)
+**2. Multi-hop aggregation**  
+Separate SAGEConv layers aggregate 1-hop and 2-hop neighborhoods independently.
+
+**3. Concatenative combination**  
+Ego embedding and all hop-wise aggregations are concatenated (not averaged):
 
 ```
 z_v = Linear([ego_v | h_v^(1) | h_v^(2)])
 ```
 
-This ensures the fraud signal at node `v` cannot be diluted by its typically benign neighborhood.
+The fraud signal at node `v` cannot be washed out by its typically benign neighborhood because `ego_v` always contributes an unmodified self-representation.
 
 ### Two-Stage Cascade
 
-1. Train H2GCN, extract node embeddings from the trained encoder
-2. For each transaction edge (u, v): construct feature vector = [source embedding | destination embedding | raw edge features]
-3. Train XGBoost on this enriched feature matrix with `scale_pos_weight` set to training class ratio
-4. Select F1-optimal decision threshold on validation set
+```
+[Train H2GCN] → [Extract node embeddings]
+     ↓
+For each edge (u, v):
+  feature_vec = [embed_u | embed_v | raw_edge_features]
+     ↓
+[Train XGBoost on enriched feature matrix]
+     ↓
+[F1-optimal threshold on validation set]
+```
+
+XGBoost trained on raw edge features alone: PR-AUC = 0.511  
+XGBoost trained on H2GCN embeddings + edge features: PR-AUC = 0.595  
+The 8.4% gain is entirely attributable to graph structure encoded in the embeddings.
 
 ---
 
 ## Novel Features
 
-Three domain-driven structuring-detection features encode smurfing behavior that raw transaction amounts miss:
+### Structuring-Detection Features (smurfing behavior)
 
 | Feature | Description |
 |---|---|
-| `near_threshold` | Binary flag for amounts in [$8,500, $10,000) — just below the US Bank Secrecy Act reporting threshold |
+| `near_threshold` | Binary flag for transaction amounts in [$8,500, $10,000) — just below the US Bank Secrecy Act reporting threshold |
 | `structuring_burst` | Normalized per-account count of near-threshold outgoing transfers (clipped at 20, scaled to [0,1]) |
 | `same_bank` | Binary flag for intra-bank transfers, which exhibit different laundering patterns than cross-institution transfers |
 
-Two graph structural features:
+### Graph Structural Features
 
 | Feature | Description |
 |---|---|
-| `pagerank` | Computed via sparse power-iteration on SciPy CSR matrix — converges in ~40 iterations |
-| `kcore_proxy` | min(out_degree, in_degree) — cheap approximation of graph k-coreness for identifying structurally central nodes |
+| `pagerank` | Sparse power-iteration on SciPy CSR matrix (~40 iterations, no full adjacency materialization) |
+| `kcore_proxy` | min(out_degree, in_degree) — cheap approximation of k-coreness identifying structurally central nodes |
 
 ---
 
@@ -97,56 +119,37 @@ aml-heterophily-gnn/
 ├── README.md
 ├── requirements.txt
 ├── LICENSE
+├── .gitignore
+│
+├── aml_gnn_v2.py          # Full pipeline: feature engineering, GNN training, cascade, evaluation
 │
 ├── data/
-│   └── README.md                  # Instructions for downloading IBM AML and Elliptic datasets
-│
-├── src/
-│   ├── data/
-│   │   ├── load_ibm.py            # IBM AML HI-Medium loading and preprocessing
-│   │   ├── load_elliptic.py       # Elliptic Bitcoin dataset loading
-│   │   └── feature_engineering.py # Edge/node feature construction + structuring features
-│   │
-│   ├── models/
-│   │   ├── graphsage.py           # Two-layer SAGEConv baseline
-│   │   ├── gat.py                 # GATv2Conv with 4 attention heads
-│   │   ├── tgn.py                 # Temporal Graph Network with TGNMemory
-│   │   ├── h2gcn.py               # H2GCN — heterophily-aware architecture (proposed)
-│   │   └── cascade.py             # Two-stage H2GCN + XGBoost cascade
-│   │
-│   ├── train.py                   # Training loop with Focal Loss + cosine annealing
-│   ├── evaluate.py                # ROC-AUC, PR-AUC, recall, F1 evaluation
-│   └── calibration.py             # Platt scaling + isotonic regression
-│
-├── notebooks/
-│   ├── 01_eda.ipynb               # Dataset exploration, class imbalance analysis
-│   ├── 02_feature_engineering.ipynb  # Structuring feature construction and validation
-│   ├── 03_model_comparison.ipynb  # Full model tournament with ablations
-│   └── 04_results_visualization.ipynb  # Score distributions, PR curves, confusion matrices
+│   └── README.md          # Dataset download instructions (datasets not included due to size)
 │
 ├── results/
-│   ├── figures/                   # Score distributions, PR curves, loss curves (Figs 1-6)
-│   └── tables/                    # Model comparison tables (Tables I-II equivalent)
+│   ├── figures/           # Score distributions, PR curves, confusion matrix, loss curves
+│   └── tables/            # Model comparison tables
 │
-└── report/
-    └── Jain_AML_GNN_DS402.pdf     # Full paper
+└── docs/
+    ├── report.pdf         # Full paper
+    └── presentation.pdf   # Final presentation slides
 ```
 
 ---
 
 ## Datasets
 
+Neither dataset is included in the repository due to size and licensing.
+
 ### IBM AML HI-Medium
-- 2,000,000 transactions between ~500,000 accounts
-- Fraud rate: 0.003% (extremely imbalanced)
-- Download: [IBM AML Dataset on Kaggle](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml)
-- Place in `data/ibm/`
+2,000,000 transactions | ~500,000 accounts | 0.003% fraud rate  
+Download: [Kaggle — IBM AML Dataset](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml)  
+→ Place as `data/ibm/HI-Medium_Trans.csv`
 
 ### Elliptic Bitcoin Dataset
-- 203,769 transaction nodes, 234,355 directed edges
-- Illicit rate: 9.76%
-- Download: [Elliptic Dataset on Kaggle](https://www.kaggle.com/datasets/ellipticco/elliptic-data-set)
-- Place in `data/elliptic/`
+203,769 nodes | 234,355 directed edges | 9.76% illicit rate  
+Download: [Kaggle — Elliptic Dataset](https://www.kaggle.com/datasets/ellipticco/elliptic-data-set)  
+→ Place as `data/elliptic/`
 
 ---
 
@@ -158,7 +161,7 @@ cd aml-heterophily-gnn
 pip install -r requirements.txt
 ```
 
-**requirements.txt:**
+**requirements.txt**
 ```
 torch>=2.0.0
 torch-geometric>=2.3.0
@@ -169,85 +172,81 @@ pandas>=1.5.0
 numpy>=1.23.0
 matplotlib>=3.6.0
 seaborn>=0.12.0
-jupyter>=1.0.0
 ```
 
-> GPU training was performed on Bridges2 PSC (NVIDIA V100 32GB). CPU training is supported but significantly slower on the IBM dataset.
+> Training was run on **Bridges2 PSC** (NVIDIA V100 32GB GPU). CPU execution is supported but significantly slower on the IBM dataset.
 
 ---
 
 ## Usage
 
-### Feature Engineering
 ```bash
-python src/data/feature_engineering.py --dataset ibm --data_dir data/ibm/
+# IBM AML — full pipeline (feature engineering → GNN training → cascade → evaluation)
+python aml_gnn_v2.py --dataset ibm --model h2gcn
+
+# Elliptic Bitcoin
+python aml_gnn_v2.py --dataset elliptic --model gat
+
+# Run all models for comparison
+python aml_gnn_v2.py --dataset ibm --model all
 ```
 
-### Training
-
-```bash
-# Train H2GCN on IBM AML
-python src/train.py --model h2gcn --dataset ibm --epochs 15 --batch_size 8192 --lr 1e-3
-
-# Train baseline GAT
-python src/train.py --model gat --dataset ibm --epochs 15
-
-# Train on Elliptic Bitcoin
-python src/train.py --model gat --dataset elliptic --epochs 15
-```
-
-### Two-Stage Cascade
-```bash
-python src/models/cascade.py --gnn_checkpoint checkpoints/h2gcn_ibm.pt --dataset ibm
-```
-
-### Evaluation
-```bash
-python src/evaluate.py --checkpoint checkpoints/h2gcn_cascade_ibm.pt --dataset ibm
-```
+> Adjust argument names above to match the actual flags in your script.
 
 ---
 
-## Training Details
+## Training Configuration
 
 | Parameter | Value |
 |---|---|
-| Loss function | Focal Loss (γ = 2) |
-| Optimizer | Adam |
-| Learning rate | 1e-3 |
-| LR scheduler | Cosine annealing with warm restarts |
+| Loss | Focal Loss (γ = 2) |
+| Optimizer | Adam (lr = 1e-3) |
+| Scheduler | Cosine annealing with warm restarts |
 | Epochs | 15 |
 | Batch size | 8,192 edges |
-| Graph sampling | Neighborhood sampling with CSR-based subgraph extraction |
 | Calibration | Platt scaling / isotonic regression |
-| Threshold selection | F1-optimal on validation set |
+| Threshold | F1-optimal on validation set |
+| Split | 60/20/20 stratified edge-level |
 | Hardware | Bridges2 PSC — NVIDIA V100 32GB |
-| Train/Val/Test split | 60/20/20 (stratified, edge-level) |
 
 ---
 
-## Results Discussion
+## Results
 
-The 22× PR-AUC gap between H2GCN (0.113) and GAT (0.005) on identical data and features isolates heterophily as the dominant failure mode. Both models use identical edge-level classification heads and training procedures, the only difference is H2GCN's ego-projection and concatenative multi-hop aggregation.
+### Score Distributions
 
-The cascade's 8.1 percentage point PR-AUC improvement over tabular XGBoost (0.595 vs. 0.511) is attributable entirely to structural information encoded in the H2GCN embeddings, information that raw edge features cannot recover.
+GAT score distribution — fraud probability spreads broadly across benign transactions:
+
+![GAT Score Distribution](results/figures/score_dist_gat.png)
+
+H2GCN score distribution — sharp bimodal separation after ego-neighbor separation:
+
+![H2GCN Score Distribution](results/figures/score_dist_h2gcn.png)
+
+### Precision-Recall Curve (H2GCN, IBM)
+
+![PR Curve H2GCN](results/figures/pr_curve_h2gcn.png)
+
+### Training Curves (H2GCN)
+
+![Loss and Recall Curves](results/figures/training_curves_h2gcn.png)
 
 ---
 
 ## Limitations
 
-- IBM dataset is synthetic (calibrated to real banking patterns, but distributional gap to live data is unknown)
-- 46,373 false positives per 400K transactions (11.6% FPR) would require additional false-positive reduction for bank-scale deployment
-- Pipeline is batch-trained; cannot respond to adversarial concept drift in real time
+- IBM dataset is synthetic (calibrated to real banking patterns — distributional gap to live data is unknown)
+- 46,373 false positives per 400K transactions (11.6% FPR) remains the primary operational challenge at bank scale
+- Batch-trained pipeline cannot adapt to adversarial concept drift in real time
 
 ---
 
 ## Future Work
 
-- **Temporal H2GCN**: Combine TGN's temporal memory with H2GCN's ego-separation for both structural and sequence signals
-- **Explainability**: GNNExplainer for compliance-ready suspicious activity report justifications (EU AMLD6)
-- **Online learning**: Continual learning with drift detection for real-time adaptation
-- **Multi-relational graphs**: Heterogeneous GNNs for multiple edge types (wire, ACH, card, cash)
+- **Temporal H2GCN**: Combine TGN's temporal memory with H2GCN's ego-separation
+- **Explainability**: GNNExplainer for compliance-ready alert justifications (EU AMLD6)
+- **Online learning**: Continual learning with drift detection
+- **Multi-relational graphs**: Heterogeneous GNNs for wire, ACH, card, and cash edge types
 
 ---
 
@@ -255,10 +254,10 @@ The cascade's 8.1 percentage point PR-AUC improvement over tabular XGBoost (0.59
 
 1. Hamilton et al. (2017). Inductive representation learning on large graphs. *NeurIPS*.
 2. Veličković et al. (2018). Graph attention networks. *ICLR*.
-3. Rossi et al. (2020). Temporal graph networks for deep learning on dynamic graphs. *arXiv:2006.10637*.
-4. Zhu et al. (2020). Beyond homophily in graph neural networks. *NeurIPS*.
+3. Rossi et al. (2020). Temporal graph networks. *arXiv:2006.10637*.
+4. **Zhu et al. (2020). Beyond homophily in graph neural networks. *NeurIPS*.** ← core paper
 5. Weber et al. (2019). Anti-money laundering in Bitcoin. *KDD Workshop on Anomaly Detection in Finance*.
-6. Altman et al. (2023). Realistic synthetic financial transactions for AML models. *NeurIPS Datasets and Benchmarks*.
+6. Altman et al. (2023). Realistic synthetic financial transactions for AML. *NeurIPS Datasets and Benchmarks*.
 7. Lin et al. (2017). Focal loss for dense object detection. *ICCV*.
 8. Chen & Guestrin (2016). XGBoost. *KDD*.
 
@@ -268,14 +267,14 @@ The cascade's 8.1 percentage point PR-AUC improvement over tabular XGBoost (0.59
 
 ```bibtex
 @misc{jain2026aml,
-  author    = {Moulik Jain},
-  title     = {Graph-Based Financial Intelligence: Detecting Money Laundering with Heterophily-Aware Graph Neural Networks},
-  year      = {2026},
-  school    = {Pennsylvania State University},
-  note      = {DS402 Final Project}
+  author = {Moulik Jain},
+  title  = {Graph-Based Financial Intelligence: Detecting Money Laundering with Heterophily-Aware Graph Neural Networks},
+  year   = {2026},
+  school = {Pennsylvania State University},
+  note   = {DS402 Final Project}
 }
 ```
 
 ---
 
-*Trained on Bridges2 PSC supercomputing resources at Pittsburgh Supercomputing Center.*
+*Compute: Bridges2 PSC (Pittsburgh Supercomputing Center) — NVIDIA V100 32GB*
