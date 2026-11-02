@@ -39,7 +39,7 @@ This project identifies **heterophily** — fraudulent nodes connecting predomin
 
 **The cascade** reduces false positives from 187,115 → 46,373 while achieving PR-AUC = 0.595 — a **119× improvement** over GAT standalone.
 
-### Elliptic Bitcoin (zero-shot generalization, no retraining)
+### Elliptic Bitcoin (same architecture, trained and tested on Elliptic)
 GAT: ROC-AUC = 0.906 | PR-AUC = 0.599 | Recall = 0.944
 
 ---
